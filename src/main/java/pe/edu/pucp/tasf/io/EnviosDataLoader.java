@@ -73,9 +73,10 @@ public class EnviosDataLoader {
     private final Set<String> icaoCodes = new LinkedHashSet<>();
 
     /**
-     * Lee TODOS los archivos _envios_XXXX_.txt contenidos en la carpeta indicada.
+     * Lee TODOS los archivos _envios_XXXX_.txt contenidos en la carpeta indicada,
+     * usando un offset entero (días desde la fecha base) como punto de inicio.
      *
-     * @param folder carpeta que contiene los archivos (p. ej. "_envios_preliminar_")
+     * @param folder   carpeta que contiene los archivos (p. ej. "_envios_preliminar_")
      * @param startDay día 0-based de inicio del rango a filtrar (inclusivo).
      *                 Ej: 0 = desde el primer día con datos. Use -1 para no filtrar.
      * @param numDays  cantidad de días a leer a partir de startDay. Use -1 para leer todo.
@@ -89,7 +90,7 @@ public class EnviosDataLoader {
         // Primer barrido: descubrir la fecha mínima para fijar la referencia
         discoverBaseDate(folder);
 
-        // Calcular fecha de inicio y fin según los parámetros del usuario
+        // Convertir el offset en días a una fecha absoluta de inicio
         LocalDate rangeStart = (startDay < 0)
                 ? baseDate
                 : baseDate.plusDays(startDay);
@@ -97,6 +98,48 @@ public class EnviosDataLoader {
                 ? LocalDate.MAX
                 : rangeStart.plusDays(numDays); // exclusivo
 
+        // Delegar la carga real al método interno
+        loadRange(folder, rangeStart, rangeEnd);
+    }
+
+    /**
+     * Sobrecarga que acepta la fecha de inicio directamente como {@link LocalDate},
+     * evitando que el usuario tenga que calcular el offset manualmente.
+     *
+     * @param folder    carpeta que contiene los archivos
+     * @param startDate fecha de inicio del rango a filtrar (inclusiva)
+     * @param numDays   cantidad de días a leer; -1 para leer hasta el final
+     * @throws IOException si falla la lectura del directorio
+     */
+    public void loadFromFolder(Path folder, LocalDate startDate, int numDays) throws IOException {
+        if (!Files.isDirectory(folder)) {
+            throw new IOException("La carpeta no existe o no es un directorio: " + folder);
+        }
+
+        // Descubrir la fecha base (necesaria para calcular creationTime relativo)
+        discoverBaseDate(folder);
+
+        // Calcular la fecha de fin a partir de la fecha de inicio y la cantidad de días
+        LocalDate rangeEnd = (numDays < 0)
+                ? LocalDate.MAX
+                : startDate.plusDays(numDays); // exclusivo
+
+        // Delegar la carga real al método interno
+        loadRange(folder, startDate, rangeEnd);
+    }
+
+    /**
+     * Método interno compartido: leer y filtrar los archivos de envíos dentro
+     * del rango de fechas [rangeStart, rangeEnd).
+     * Debe llamarse DESPUÉS de {@link #discoverBaseDate} para que {@code baseDate} esté definida.
+     *
+     * @param folder     carpeta con los archivos
+     * @param rangeStart fecha de inicio inclusiva
+     * @param rangeEnd   fecha de fin exclusiva
+     * @throws IOException si falla la lectura del directorio
+     */
+    private void loadRange(Path folder, LocalDate rangeStart, LocalDate rangeEnd)
+            throws IOException {
         System.out.printf("[EnviosDataLoader] Fecha base = %s, rango = [%s, %s)%n",
                 baseDate, rangeStart, rangeEnd);
 

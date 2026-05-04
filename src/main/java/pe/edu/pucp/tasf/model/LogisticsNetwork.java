@@ -24,10 +24,18 @@ public class LogisticsNetwork {
     /** Índice: código de aeropuerto → lista de vuelos salientes desde él. */
     private final Map<String, List<Flight>> outgoing;
 
+    /**
+     * Caché de vuelos virtuales multi-día (ID como "F5_d1", "F5_d2", etc.).
+     * Reutilizar el mismo objeto garantiza que {@code assignedLoad} se acumule
+     * correctamente y que {@link #resetLoads()} los limpie junto con los reales.
+     */
+    private final Map<String, Flight> virtualFlights;
+
     public LogisticsNetwork() {
         this.airports = new LinkedHashMap<>();
         this.flights = new ArrayList<>();
         this.outgoing = new HashMap<>();
+        this.virtualFlights = new LinkedHashMap<>();
     }
 
     public void addAirport(Airport airport) {
@@ -46,32 +54,62 @@ public class LogisticsNetwork {
      * aeropuerto {@code airportCode} que pueden despegar a partir de
      * {@code minDepartureTime}.
      *
-     * Para soportar ruteo multi-día: si {@code minDepartureTime} ya superó
-     * el día 1, los vuelos de horario temprano "se repiten" al día siguiente.
-     * Se genera un vuelo virtual (mismo id + "_dN") para representarlo.
+     * Los vuelos base tienen {@code departureTime ∈ [0, 1)} (fracción del día 0).
+     * Para soportar ruteo multi-día se escala el tiempo base al día actual:
+     *   {@code scaledDep = f.getDepartureTime() + dayOffset}
+     * donde {@code dayOffset = floor(minDepartureTime)}.
+     *
+     * Si el vuelo ya despegó hoy (scaledDep < minDepartureTime), se crea un
+     * vuelo virtual para el día siguiente. El objeto virtual se guarda en caché
+     * (id + "_dN") para que su {@code assignedLoad} persista y se limpie en
+     * {@link #resetLoads()}.
+     *
+     * Ejemplo: vuelo base departe a 0.3 (7:12), minDepartureTime = 803.25 (día 803, 6:00).
+     *   scaledDep = 0.3 + 803 = 803.3 ≥ 803.25 → disponible hoy como "F5_d803" ✓
+     *   (el código anterior computaba dayOffset+1 = 804 y se lo saltaba completamente)
      */
     public List<Flight> getActiveFlightsFrom(String airportCode, double minDepartureTime) {
         List<Flight> available = outgoing.getOrDefault(airportCode, Collections.emptyList());
         List<Flight> result = new ArrayList<>();
 
+        // Día entero en el que cae minDepartureTime (p.ej. 803 para 803.25)
+        double dayOffset = Math.floor(minDepartureTime);
+
         for (Flight f : available) {
             if (f.isCancelled()) continue;
 
-            // Coincidencia directa: el vuelo despega después del tiempo actual
-            if (f.getDepartureTime() >= minDepartureTime) {
-                result.add(f);
-            }
-            // Multi-día: si ya pasamos del día 1, los vuelos se repiten cada día.
-            // Un vuelo a las 0.1 hoy es también a las 1.1 mañana, 2.1 pasado...
-            else if (minDepartureTime > 0.5) {
-                double dayOffset = Math.floor(minDepartureTime);
-                double adjustedDep = f.getDepartureTime() + dayOffset + 1.0;
-                if (adjustedDep >= minDepartureTime) {
-                    // Vuelo virtual para el día siguiente
-                    Flight nextDay = new Flight(f.getId() + "_d" + (int)(dayOffset + 1),
-                            f.getOrigin(), f.getDestination(), f.getCapacity(), adjustedDep);
-                    result.add(nextDay);
+            // Escalar el tiempo base del vuelo al día actual.
+            // Los vuelos base tienen departureTime ∈ [0, 1) → el del día N es baseDep + N.
+            double scaledDep = f.getDepartureTime() + dayOffset;
+
+            if (scaledDep >= minDepartureTime) {
+                // Vuelo disponible hoy
+                if (dayOffset == 0) {
+                    // Día base: usar el objeto original (sin virtualizar)
+                    result.add(f);
+                } else {
+                    int dayNum = (int) dayOffset;
+                    String virtualId = f.getId() + "_d" + dayNum;
+                    final double dep = scaledDep;
+                    // Preservar el transitTime real del vuelo base (no el valor fijo del enunciado)
+                    final double arr = dep + f.getTransitTime();
+                    Flight sameDay = virtualFlights.computeIfAbsent(virtualId, k ->
+                            new Flight(k, f.getOrigin(), f.getDestination(),
+                                    f.getCapacity(), dep, arr));
+                    result.add(sameDay);
                 }
+            } else {
+                // Vuelo ya despegó hoy → usar la ocurrencia del día siguiente
+                double nextDayDep = f.getDepartureTime() + dayOffset + 1.0;
+                int nextDayNum = (int) dayOffset + 1;
+                String virtualId = f.getId() + "_d" + nextDayNum;
+                final double dep = nextDayDep;
+                // Preservar el transitTime real del vuelo base (no el valor fijo del enunciado)
+                final double arr = dep + f.getTransitTime();
+                Flight nextDay = virtualFlights.computeIfAbsent(virtualId, k ->
+                        new Flight(k, f.getOrigin(), f.getDestination(),
+                                f.getCapacity(), dep, arr));
+                result.add(nextDay);
             }
         }
 
@@ -85,25 +123,51 @@ public class LogisticsNetwork {
     }
 
     /**
-     * Enumera TODAS las rutas posibles (hasta {@code maxHops} saltos) entre
-     * origen y destino. Se usa tanto en la heurística greedy inicial como en
-     * la exploración del vecindario del Tabu Search.
+     * Enumera rutas posibles (hasta {@code maxHops} saltos) entre origen y destino,
+     * devolviendo como máximo {@code maxResults} caminos.
+     *
+     * Se explotan primero los vuelos con salida más temprana (el DFS visita los vuelos
+     * en orden de hora de salida), por lo que los primeros resultados tienden a ser
+     * los de menor tiempo de tránsito.
      *
      * Advertencia: el costo es exponencial en maxHops; se recomienda
      * maxHops ≤ 3 para redes densas.
+     *
+     * @param origin     aeropuerto de origen
+     * @param destination aeropuerto de destino
+     * @param startTime  tiempo mínimo de salida del primer vuelo
+     * @param maxHops    profundidad máxima del DFS (número de vuelos en la ruta)
+     * @param maxResults límite de rutas a devolver; usar {@link Integer#MAX_VALUE} para sin límite
+     * @return lista de caminos (cada camino es una lista ordenada de vuelos)
      */
     public List<List<Flight>> findRoutes(Airport origin, Airport destination,
-                                         double startTime, int maxHops) {
+                                         double startTime, int maxHops, int maxResults) {
         List<List<Flight>> result = new ArrayList<>();
         findRoutesRecursive(origin.getCode(), destination.getCode(), startTime,
-                maxHops, new ArrayList<>(), new HashSet<>(), result);
+                maxHops, new ArrayList<>(), new HashSet<>(), result, maxResults);
         return result;
     }
 
-    /** DFS acotado en profundidad para enumerar rutas simples (sin ciclos). */
+    /**
+     * Sobrecarga sin límite de resultados (compatibilidad con código existente).
+     * Equivalente a llamar con maxResults = {@link Integer#MAX_VALUE}.
+     */
+    public List<List<Flight>> findRoutes(Airport origin, Airport destination,
+                                         double startTime, int maxHops) {
+        return findRoutes(origin, destination, startTime, maxHops, Integer.MAX_VALUE);
+    }
+
+    /**
+     * DFS acotado en profundidad para enumerar rutas simples (sin ciclos).
+     * Se detiene anticipadamente cuando ya se han encontrado {@code maxResults} rutas.
+     */
     private void findRoutesRecursive(String current, String target, double currentTime,
                                      int hopsLeft, List<Flight> path,
-                                     Set<String> visited, List<List<Flight>> result) {
+                                     Set<String> visited, List<List<Flight>> result,
+                                     int maxResults) {
+        // Corte anticipado: ya alcanzamos el límite de rutas solicitado
+        if (result.size() >= maxResults) return;
+
         if (current.equals(target) && !path.isEmpty()) {
             result.add(new ArrayList<>(path));
             return;
@@ -112,11 +176,13 @@ public class LogisticsNetwork {
 
         visited.add(current);
         for (Flight f : getActiveFlightsFrom(current, currentTime)) {
+            // Corte anticipado dentro del bucle para no seguir expandiendo nodos
+            if (result.size() >= maxResults) break;
             String nextCode = f.getDestination().getCode();
             if (!visited.contains(nextCode)) {
                 path.add(f);
                 findRoutesRecursive(nextCode, target, f.getArrivalTime(),
-                        hopsLeft - 1, path, visited, result);
+                        hopsLeft - 1, path, visited, result, maxResults);
                 path.remove(path.size() - 1);
             }
         }
@@ -134,12 +200,15 @@ public class LogisticsNetwork {
     }
 
     /**
-     * Pone a cero las cargas asignadas de todos los vuelos y el stock de los
-     * aeropuertos. Se invoca antes de reconstruir una solución para evitar
-     * contabilidad errónea.
+     * Pone a cero las cargas asignadas de todos los vuelos (reales y virtuales)
+     * y el stock de los aeropuertos. Se invoca antes de reconstruir una solución
+     * para evitar contabilidad errónea.
      */
     public void resetLoads() {
         for (Flight f : flights) {
+            f.setAssignedLoad(0);
+        }
+        for (Flight f : virtualFlights.values()) {
             f.setAssignedLoad(0);
         }
         for (Airport a : airports.values()) {

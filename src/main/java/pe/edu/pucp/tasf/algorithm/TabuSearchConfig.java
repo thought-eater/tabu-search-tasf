@@ -19,13 +19,15 @@ public class TabuSearchConfig {
     // ================= Parámetros de la búsqueda =================
 
     /** Iteraciones máximas del bucle principal. */
-    private int maxIterations = 1000;
+    private int maxIterations = 1_000;
 
     /** Permanencia de un movimiento en la lista tabú (en iteraciones). */
     private int tabuTenure = 15;
 
-    /** Cantidad de candidatos evaluados por iteración en el vecindario. */
-    private int neighborhoodSize = 20;
+    /** Cantidad de candidatos evaluados por iteración en el vecindario.
+     *  Se escala dinámicamente en el solver a max(neighborhoodSize, min(500, n/10))
+     *  para garantizar cobertura mínima en instancias con miles de envíos. */
+    private int neighborhoodSize = 200;
 
     /** Máximo número de escalas (vuelos) por ruta construida. */
     private int maxHops = 3;

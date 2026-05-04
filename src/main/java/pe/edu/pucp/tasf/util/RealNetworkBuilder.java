@@ -8,116 +8,78 @@ import java.nio.file.Path;
 import java.util.*;
 
 /**
- * Constructor de red logística a partir de un conjunto de códigos ICAO reales.
+ * Constructor de red logística a partir de aeropuertos y vuelos reales.
  *
- * Si se provee la ruta al archivo planes_vuelo.txt (método {@link #build(Collection, Path)}),
- * los vuelos se cargan desde ese archivo en lugar de generarse sintéticamente.
- * Si no se provee (método {@link #build(Collection)}), se genera una malla sintética
- * como fallback.
+ * Método principal:
+ *   {@link #build(List, Path)} — recibe aeropuertos ya cargados desde
+ *   {@code aeropuertos.txt} (vía {@link pe.edu.pucp.tasf.io.AirportsLoader})
+ *   y carga los vuelos desde {@code planes_vuelo.txt}.
+ *
+ * Método alternativo (sólo para modos que no disponen del archivo de
+ * aeropuertos, como EXP cuando se invoca sin él):
+ *   {@link #build(Collection, Path)} — deriva los aeropuertos de los
+ *   códigos ICAO encontrados en los envíos y carga los vuelos reales.
+ *
+ * Ya no existe un modo de respaldo sintético: si {@code planes_vuelo.txt}
+ * no se puede leer, se lanza una excepción en lugar de generar vuelos al azar.
  */
 public class RealNetworkBuilder {
 
-    private final Random random;
-
     public RealNetworkBuilder(long seed) {
-        this.random = new Random(seed);
+        // seed no utilizada: eliminado el generador sintético
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
-     * Construye la red logística usando vuelos REALES del archivo planes_vuelo.txt.
-     * Solo se añaden los vuelos cuyos aeropuertos origen y destino estén en icaoCodes.
+     * Construye la red logística a partir de una lista de aeropuertos ya
+     * cargados (p.ej. desde {@code aeropuertos.txt} con
+     * {@link pe.edu.pucp.tasf.io.AirportsLoader}) y del archivo de vuelos.
      *
-     * @param icaoCodes    códigos ICAO de los aeropuertos (de los archivos _envios_)
-     * @param flightsFile  ruta a planes_vuelo.txt
+     * @param airports   aeropuertos a registrar en la red
+     * @param flightsFile ruta a {@code planes_vuelo.txt}
+     * @throws IOException si el archivo de vuelos no se puede leer
      */
-    public LogisticsNetwork build(Collection<String> icaoCodes, Path flightsFile) {
-        LogisticsNetwork network = buildAirports(icaoCodes);
-
-        try {
-            RealFlightLoader loader = new RealFlightLoader();
-            int loaded = loader.load(flightsFile, network);
-            System.out.printf("[RealNetworkBuilder] Vuelos reales cargados: %d%n", loaded);
-        } catch (IOException e) {
-            System.err.println("[RealNetworkBuilder] No se pudo leer planes_vuelo.txt: "
-                    + e.getMessage() + " — usando vuelos sintéticos como fallback.");
-            addSyntheticFlights(network);
+    public LogisticsNetwork build(List<Airport> airports, Path flightsFile) throws IOException {
+        LogisticsNetwork network = new LogisticsNetwork();
+        for (Airport a : airports) {
+            network.addAirport(a);
         }
-
+        RealFlightLoader loader = new RealFlightLoader();
+        int loaded = loader.load(flightsFile, network);
+        System.out.printf("[RealNetworkBuilder] Aeropuertos: %d | Vuelos reales cargados: %d%n",
+                airports.size(), loaded);
         return network;
     }
 
     /**
-     * Construye la red logística usando vuelos SINTÉTICOS (fallback sin planes_vuelo.txt).
+     * Construye la red logística derivando los aeropuertos de los códigos ICAO
+     * presentes en los envíos. Usado como fallback cuando no se dispone del
+     * archivo {@code aeropuertos.txt} completo (p.ej. modo EXP sin ese archivo).
+     *
+     * @param icaoCodes   códigos ICAO descubiertos en los archivos _envios_
+     * @param flightsFile ruta a {@code planes_vuelo.txt}
+     * @throws IOException si el archivo de vuelos no se puede leer
      */
-    public LogisticsNetwork build(Collection<String> icaoCodes) {
-        LogisticsNetwork network = buildAirports(icaoCodes);
-        addSyntheticFlights(network);
+    public LogisticsNetwork build(Collection<String> icaoCodes, Path flightsFile) throws IOException {
+        LogisticsNetwork network = buildAirportsFromIcao(icaoCodes);
+        RealFlightLoader loader = new RealFlightLoader();
+        int loaded = loader.load(flightsFile, network);
+        System.out.printf("[RealNetworkBuilder] Aeropuertos (ICAO): %d | Vuelos reales cargados: %d%n",
+                network.getAirportCount(), loaded);
         return network;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Crea los Airport y los registra en la red. */
-    private LogisticsNetwork buildAirports(Collection<String> icaoCodes) {
+    /** Crea Airport mínimos a partir de códigos ICAO (continente auto-derivado). */
+    private LogisticsNetwork buildAirportsFromIcao(Collection<String> icaoCodes) {
         LogisticsNetwork network = new LogisticsNetwork();
         for (String code : icaoCodes) {
             Continent cont = Continent.fromIcao(code);
-            int capacity = randWarehouseCapacity();
-            Airport a = new Airport(code, code, cont, capacity);
+            Airport a = new Airport(code, code, cont, 600); // capacidad fija por defecto
             network.addAirport(a);
         }
         return network;
     }
-
-    /** Genera vuelos sintéticos según las reglas del enunciado (malla completa). */
-    private void addSyntheticFlights(LogisticsNetwork network) {
-        Map<Continent, List<Airport>> byContinent = new EnumMap<>(Continent.class);
-        for (Continent c : Continent.values()) byContinent.put(c, new ArrayList<>());
-        for (Airport a : network.getAirports()) {
-            byContinent.get(a.getContinent()).add(a);
-        }
-
-        int flightId = 1;
-
-        // Intra-continentales: 2 frecuencias
-        for (List<Airport> group : byContinent.values()) {
-            for (Airport o : group) {
-                for (Airport d : group) {
-                    if (o.equals(d)) continue;
-                    for (double dep : new double[]{0.10, 0.55}) {
-                        network.addFlight(new Flight(
-                                "F" + (flightId++), o, d, randSameContCapacity(), dep));
-                    }
-                }
-            }
-        }
-
-        // Inter-continentales: 1 frecuencia garantizada, 2ª con 50%
-        List<Continent> continents = Arrays.asList(Continent.values());
-        for (Continent oc : continents) {
-            for (Continent dc : continents) {
-                if (oc == dc) continue;
-                List<Airport> origins = byContinent.get(oc);
-                List<Airport> dests   = byContinent.get(dc);
-                if (origins.isEmpty() || dests.isEmpty()) continue;
-                for (Airport o : origins) {
-                    for (Airport d : dests) {
-                        if (random.nextDouble() > 0.70) continue;
-                        double dep1 = 0.05 + random.nextDouble() * 0.25;
-                        network.addFlight(new Flight(
-                                "F" + (flightId++), o, d, randDiffContCapacity(), dep1));
-                        if (random.nextDouble() < 0.50) {
-                            double dep2 = 0.40 + random.nextDouble() * 0.30;
-                            network.addFlight(new Flight(
-                                    "F" + (flightId++), o, d, randDiffContCapacity(), dep2));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private int randWarehouseCapacity()  { return 500 + random.nextInt(301); }
-    private int randSameContCapacity()   { return 150 + random.nextInt(101); }
-    private int randDiffContCapacity()   { return 150 + random.nextInt(251); }
 }

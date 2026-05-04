@@ -47,6 +47,20 @@ public class TabuSearchSolver {
     /** Mapa: movimiento -> iteración en la que expira su estado tabú. */
     private final Map<TabuMove, Integer> tabuList;
 
+    // ================ Rutas precomputadas ================
+
+    /**
+     * Mapa de rutas candidatas por envío, precomputado al inicio de cada solve().
+     *
+     * Se construye una sola vez antes del bucle TS usando el {@code creationTime}
+     * exacto de cada envío como {@code startTime} del DFS. Esto garantiza que
+     * ninguna ruta retornada contiene vuelos que hayan despegado antes de que
+     * el envío exista.
+     *
+     * Durante el bucle TS todas las consultas son O(1) — un simple lookup en este mapa.
+     */
+    private Map<ShipmentRequest, List<List<Flight>>> candidateRoutes = new HashMap<>();
+
     // ================ Estado interno de la búsqueda ================
 
     private Solution currentSolution;
@@ -81,7 +95,10 @@ public class TabuSearchSolver {
         System.out.printf("Envíos: %d, Aeropuertos: %d, Vuelos: %d%n",
                 requests.size(), network.getAirportCount(), network.getFlightCount());
 
-        // Paso 1: construir la solución inicial con heurística greedy
+        // Paso 1: precomputar rutas candidatas para todos los envíos
+        precomputeRoutes(requests);
+
+        // Paso 2: construir la solución inicial con heurística greedy
         currentSolution = generateInitialSolution();
         bestSolution = currentSolution.copy();
         bestFitness  = bestSolution.getFitness();
@@ -89,7 +106,7 @@ public class TabuSearchSolver {
         System.out.println("Solución inicial: " + currentSolution);
         fitnessHistory.add(bestFitness);
 
-        // Paso 2: bucle principal de Tabu Search
+        // Paso 3: bucle principal de Tabu Search
         for (iteration = 1; iteration <= config.getMaxIterations(); iteration++) {
 
             // Chequeo del límite de tiempo
@@ -190,9 +207,7 @@ public class TabuSearchSolver {
      * respete las capacidades actuales.
      */
     private RouteAssignment findBestGreedyRoute(ShipmentRequest req) {
-        List<List<Flight>> allRoutes = network.findRoutes(
-                req.getOrigin(), req.getDestination(),
-                req.getCreationTime(), config.getMaxHops());
+        List<List<Flight>> allRoutes = getRoutes(req);
 
         RouteAssignment best = null;
         double bestTime = Double.MAX_VALUE;
@@ -218,6 +233,44 @@ public class TabuSearchSolver {
         return best;
     }
 
+    // ========================= PRECOMPUTACIÓN DE RUTAS =========================
+
+    /**
+     * Construye el mapa de rutas candidatas para todos los envíos dados.
+     *
+     * Se llama una vez antes del bucle TS (y de nuevo en replanify() para los
+     * envíos afectados por cancelaciones). Usa el {@code creationTime} exacto
+     * de cada envío como {@code startTime} del DFS, garantizando que ninguna
+     * ruta retornada contenga vuelos que hayan despegado antes de que el envío
+     * exista.
+     *
+     * Los virtual flights necesarios se materializan aquí, durante la fase de
+     * construcción, y quedan estables durante todo el bucle de búsqueda.
+     */
+    private void precomputeRoutes(List<ShipmentRequest> reqs) {
+        for (ShipmentRequest req : reqs) {
+            List<List<Flight>> routes = network.findRoutes(
+                    req.getOrigin(), req.getDestination(),
+                    req.getCreationTime(), config.getMaxHops(), MAX_RUTAS_POR_CONSULTA);
+            candidateRoutes.put(req, routes);
+        }
+    }
+
+    /**
+     * Devuelve las rutas precomputadas para un envío.
+     * O(1) — simple lookup en el mapa construido antes del bucle TS.
+     */
+    private List<List<Flight>> getRoutes(ShipmentRequest req) {
+        List<List<Flight>> routes = candidateRoutes.get(req);
+        return routes != null ? routes : Collections.emptyList();
+    }
+
+    /**
+     * Número máximo de rutas a retener por envío en la precomputación.
+     * Limita la explosión combinatoria en redes densas con maxHops ≥ 3.
+     */
+    private static final int MAX_RUTAS_POR_CONSULTA = 25;
+
     // ========================= EXPLORACIÓN DEL VECINDARIO =========================
 
     /**
@@ -237,19 +290,39 @@ public class TabuSearchSolver {
         int solutionSize = currentSolution.size();
         if (solutionSize == 0) return null;
 
-        List<Integer> indices = new ArrayList<>();
-        for (int i = 0; i < solutionSize; i++) indices.add(i);
-        Collections.shuffle(indices, random);
-        int candidateCount = Math.min(config.getNeighborhoodSize(), solutionSize);
+        // Seleccionar índices aleatorios sin repetición para los candidatos.
+        // Para listas grandes (>3× el tamaño del vecindario) se usa muestreo directo
+        // en O(k) en lugar de crear y mezclar la lista completa en O(n), lo que
+        // evita asignaciones innecesarias de memoria cuando la solución tiene miles
+        // de envíos.
+        // Escalar el vecindario al tamaño del problema: al menos neighborhoodSize,
+        // pero mínimo n/10 (hasta 500) para garantizar cobertura en instancias grandes.
+        int effectiveSize = Math.max(config.getNeighborhoodSize(),
+                Math.min(500, solutionSize / 10));
+        int candidateCount = Math.min(effectiveSize, solutionSize);
+        Set<Integer> selectedSet = new LinkedHashSet<>(candidateCount * 2);
+        if (candidateCount * 3 < solutionSize) {
+            // Muestreo aleatorio directo: O(k) amortizado
+            int intentos = 0;
+            while (selectedSet.size() < candidateCount && intentos < candidateCount * 10) {
+                selectedSet.add(random.nextInt(solutionSize));
+                intentos++;
+            }
+        } else {
+            // Para listas pequeñas el shuffle completo sigue siendo aceptable
+            List<Integer> todos = new ArrayList<>(solutionSize);
+            for (int i = 0; i < solutionSize; i++) todos.add(i);
+            Collections.shuffle(todos, random);
+            for (int i = 0; i < candidateCount; i++) selectedSet.add(todos.get(i));
+        }
+        List<Integer> indices = new ArrayList<>(selectedSet);
 
         for (int c = 0; c < candidateCount; c++) {
             int reqIndex = indices.get(c);
             RouteAssignment currentRoute = currentSolution.getRoute(reqIndex);
             ShipmentRequest req = currentRoute.getRequest();
 
-            List<List<Flight>> alternatives = network.findRoutes(
-                    req.getOrigin(), req.getDestination(),
-                    req.getCreationTime(), config.getMaxHops());
+            List<List<Flight>> alternatives = getRoutes(req);
 
             for (List<Flight> altPath : alternatives) {
                 // Descartar ruta idéntica a la actual
@@ -300,6 +373,10 @@ public class TabuSearchSolver {
     /**
      * Calcula el fitness parcial de una sola RouteAssignment (sin depender del
      * estado global de cargas). Usado para evaluación delta en el vecindario.
+     *
+     * La lógica espeja exactamente la de {@link Solution#getFitness()} para que
+     * el cálculo delta sea correcto:
+     *   candidateFitness = currentFitness - routeFitness(old) + routeFitness(new)
      */
     private double routeFitness(RouteAssignment ra) {
         final double PENALTY_LATE       = 1000.0;
@@ -311,7 +388,7 @@ public class TabuSearchSolver {
             f += PENALTY_LATE * qty;
             f += PENALTY_DELAY * ra.getDelay() * qty;
         }
-        if (ra.getFlights().isEmpty()) {
+        if (!ra.isFeasible()) {
             f += PENALTY_INFEASIBLE * qty;
         }
         return f;
@@ -375,9 +452,8 @@ public class TabuSearchSolver {
         for (int i = 0; i < Math.min(perturbCount, indices.size()); i++) {
             int idx = indices.get(i);
             ShipmentRequest req = currentSolution.getRoute(idx).getRequest();
-            List<List<Flight>> routes = network.findRoutes(
-                    req.getOrigin(), req.getDestination(),
-                    req.getCreationTime(), config.getMaxHops());
+            // Usar rutas precomputadas (reutiliza los resultados DFS ya calculados durante la perturbación)
+            List<List<Flight>> routes = getRoutes(req);
 
             if (!routes.isEmpty()) {
                 List<Flight> randomPath = routes.get(random.nextInt(routes.size()));
@@ -438,6 +514,11 @@ public class TabuSearchSolver {
         }
 
         System.out.println("Envíos afectados: " + affected.size());
+
+        // Recomputar rutas para los envíos afectados (el vuelo cancelado ya no aparecerá)
+        List<ShipmentRequest> affectedReqs = new ArrayList<>();
+        for (int idx : affected) affectedReqs.add(currentSol.getRoute(idx).getRequest());
+        precomputeRoutes(affectedReqs);
 
         // Reruteo greedy de cada afectado
         for (int idx : affected) {

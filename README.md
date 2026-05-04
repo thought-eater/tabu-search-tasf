@@ -17,6 +17,10 @@ A **Tabu Search metaheuristic** that solves a multi-airport, multi-flight logist
 7. [Build & Run](#7-build--run)
 8. [Known Limitations & Design Notes](#8-known-limitations--design-notes)
 
+> **Note:** All simulation modes use the real logistics network loaded from
+> `aeropuertos.txt` (airports) and `planes_vuelo.txt` (flights). There is no
+> synthetic network generation.
+
 ---
 
 ## 1. Tabu Search — The Algorithm
@@ -318,13 +322,14 @@ pe.edu.pucp.tasf/
 │
 ├── io/
 │   ├── EnviosDataLoader   ← parses _envios_XXXX_.txt shipment files
+│   ├── AirportsLoader     ← parses aeropuertos.txt (UTF-16, fixed-width)
 │   ├── RealFlightLoader   ← parses planes_vuelo.txt flight schedules
-│   ├── AirportsLoader     ← parses full airport table (UTF-16, fixed-width)
-│   └── FlightsLoader      ← alternate flight loader with GMT timezone correction
+│   └── FlightsLoader      ← alternate loader (not used in active code paths)
 │
 └── util/
-    ├── NetworkGenerator   ← builds synthetic 13-airport network (E1/E2/E3)
-    └── RealNetworkBuilder ← builds network from real ICAO codes + optional flight file
+    ├── RealNetworkBuilder ← builds network from Airport list + planes_vuelo.txt
+    └── test/
+        └── RunnerTest.java ← integration smoke test
 ```
 
 ---
@@ -724,42 +729,51 @@ lateRatio  > 0.30  →  RED    (>30% late — collapse)
 
 ## 5. Simulation Modes
 
-### 5.1 E1 — Synthetic Period Simulation
+The logistics network is always loaded from the two data files in the working
+directory:
+- **`aeropuertos.txt`** — 30 real airports (América del Sur, Europa, Asia), UTF-16 format
+- **`planes_vuelo.txt`** — scheduled flights between those airports
 
-**Purpose:** Evaluate the solver over multiple simulated days using a generated network.
+### 5.1 E1 — Period Simulation (5 days)
 
-**Network:** 13 synthetic airports across all three continents, connected by a fixed set of synthetic flights. Created by `NetworkGenerator`.
+**Purpose:** Evaluate the solver over a multi-day period using real shipment data
+from `_envios_XXXX_.txt` files. Runs in 30–90 minutes.
 
 **Flow:**
 ```
-for day = 0 to numDays-1:
-    generate dailyRequests (Poisson-like, ~requestsPerDay shipments)
-    config: maxIter=500, tenure=15, neighborhood=20, maxHops=3, timeLimit=60min/days
+build network from aeropuertos.txt + planes_vuelo.txt
+load shipments from folder for [startDay, startDay+numDays)
+
+for day = 1 to numDays:
+    filter requests for this day
+    config: maxIter=500, tenure=15, neighborhood=20, maxHops=3, timeLimit=60min/numDays
 
     with 10% probability: simulate a random flight cancellation
         → solver.replanify(cancelledFlightId)
 
-    solution = solver.solve(network, requests, config)
+    solution = solver.solve(network, dayRequests, config)
     print daily report + semaphore status
 ```
 
 **Usage:**
 ```bash
-mvn exec:java -Dexec.mainClass="pe.edu.pucp.tasf.Main" -Dexec.args="E1 5 50"
-#                                                                      │  │  └─ ~50 requests/day
-#                                                                      │  └─ 5 days
-#                                                                      └─ mode
+java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main \
+    E1 ./_envios_preliminar_ 0 5
+#       └─ data folder    └─ start day 0, 5 days
+# optional: add planes_vuelo.txt path as 5th arg
 ```
 
 ---
 
 ### 5.2 E2 — Real-Time Replanning
 
-**Purpose:** Verify that replanning after a disruption (flight cancellation) completes within 5 seconds — a hard operational constraint.
+**Purpose:** Verify that replanning after a disruption (flight cancellation)
+completes within 5 seconds — a hard operational constraint.
 
 **Flow:**
 ```
-generate synthetic network + single day of requests
+build network from aeropuertos.txt + planes_vuelo.txt
+load shipments from folder (day 0)
 config: maxIter=200, tenure=10, neighborhood=15, maxHops=2, timeLimit=5s
 
 initial solution = solver.solve(...)
@@ -775,25 +789,29 @@ simulate 3 consecutive cancellation events:
 
 **Usage:**
 ```bash
-mvn exec:java -Dexec.mainClass="pe.edu.pucp.tasf.Main" -Dexec.args="E2 0 30"
-#                                                                         └─ 30 requests
+java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main \
+    E2 ./_envios_preliminar_
+# optional: add planes_vuelo.txt path as 3rd arg
 ```
 
 ---
 
 ### 5.3 E3 — Collapse Simulation
 
-**Purpose:** Find how many days the system can sustain increasing demand before quality degrades below RED threshold.
+**Purpose:** Find how many days the system can sustain increasing demand before
+quality degrades below RED threshold.
 
-**Demand growth model:** `requestsOnDay_d = baseRequests × 1.2^d` (+20% per day)
+**Demand growth model:** starts from real day-0 shipments; each day adds 20% more
+requests (cycling through the original list).
 
 **Flow:**
 ```
-day = 0
-status = GREEN
+build network from aeropuertos.txt + planes_vuelo.txt
+load base shipments from folder (day 0)
+
+day = 0; status = GREEN
 while status != RED and day < 30:
-    count = baseRequests × 1.2^day
-    generate count requests for this day
+    scaledRequests = scaleRequests(baseRequests, day)   // × 1.2^day
     config: maxIter=300, tenure=12, neighborhood=15, maxHops=3, timeLimit=2min
 
     solution = solver.solve(...)
@@ -807,58 +825,23 @@ print: "System collapsed on day X" or "Survived 30 days"
 
 **Usage:**
 ```bash
-mvn exec:java -Dexec.mainClass="pe.edu.pucp.tasf.Main" -Dexec.args="E3 0 20"
-#                                                                         └─ 20 base requests
-```
-
----
-
-### 5.4 E1R — Real Data Period Simulation
-
-**Purpose:** Run the period simulation using real shipment data from `_envios_XXXX_.txt` files.
-
-**Network construction** (`RealNetworkBuilder`):
-1. Scan all `_envios_XXXX_.txt` files → collect all ICAO codes mentioned
-2. Create `Airport` objects for each unique ICAO (continent auto-derived from prefix)
-3. If `planes_vuelo.txt` provided: load real flight schedule via `RealFlightLoader`
-4. Otherwise: synthesize a flight network connecting the discovered airports
-
-**Shipment loading** (`EnviosDataLoader`):
-- Two-pass: first pass finds the base date (minimum date across all files)
-- Second pass reads lines within `[startDay, startDay+numDays)` window
-- Time encoded as `daysOffset + (hour + min/60.0) / 24.0`
-
-**Flow:**
-```
-dataLoader = new EnviosDataLoader(folder)
-dataLoader.load(startDay, numDays)
-network = RealNetworkBuilder.build(dataLoader.getRequests(), planesFile)
-requests = dataLoader.getRequests()
-dataLoader.resolveAirports(network)   // replace ghost airports with real ones
-
-config: maxIter=500, tenure=15, neighborhood=20, maxHops=3, timeLimit=60min
-solution = solver.solve(network, requests, config)
-solver.printReport(solution)
-```
-
-**Usage:**
-```bash
 java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main \
-    E1R ./_envios_preliminar_ 0 3
-#        └─ data folder    └─ start day 0, 3 days
+    E3 ./_envios_preliminar_
+# optional: add planes_vuelo.txt path as 3rd arg
 ```
 
 ---
 
-### 5.5 EXP — Batch Experimentation
+### 5.4 EXP — Batch Experimentation
 
-**Purpose:** Run `N` independent replicas with different seeds to gather statistical data on solver performance. Output is a CSV for analysis.
+**Purpose:** Run `N` independent replicas with different seeds to gather
+statistical data on solver performance. Output is a CSV for analysis.
 
 **Flow:**
 ```
 // Load data ONCE, build network ONCE
-dataLoader.load(...)
-network = RealNetworkBuilder.build(...)
+build network from aeropuertos.txt + planes_vuelo.txt
+load shipments (day 0)
 
 open output.csv for writing
 write CSV header
@@ -874,7 +857,8 @@ for seed = 1 to replicas:
     print progress
 ```
 
-**Why flush after each row?** A 30-replica run takes ~45 minutes. Immediate flush means partial results survive if the process is interrupted.
+**Why flush after each row?** A 30-replica run takes ~45 minutes. Immediate flush
+means partial results survive if the process is interrupted.
 
 **CSV columns (15 fields):**
 
@@ -901,6 +885,7 @@ for seed = 1 to replicas:
 java -cp target/classes pe.edu.pucp.tasf.Main \
     EXP ./_envios_preliminar_ 30 E1_30_runs_TS.csv
 #                              └─ 30 replicas  └─ output file
+# optional: add planes_vuelo.txt path as 5th arg
 ```
 
 ---
@@ -941,7 +926,8 @@ So `000000001-20260102-00-47-SUAA-002-0032535` at midnight+47min becomes `creati
 
 ### 6.2 Flight Schedule (`planes_vuelo.txt`)
 
-Optional file for E1R and EXP modes. If omitted, a synthetic flight network is generated.
+Required file for all modes. Must be present in the working directory or passed
+as an explicit path argument.
 
 **Line format:**
 ```
@@ -962,17 +948,26 @@ Day-wrap is handled: if `arrivalFraction ≤ departureFraction`, the arrival is 
 
 ---
 
-### 6.3 Synthetic Network (`NetworkGenerator`)
+### 6.3 Airport File (`aeropuertos.txt`)
 
-The 13-airport synthetic network used by E1/E2/E3:
+UTF-16 fixed-width file with 30 real airports across América del Sur, Europa and Asia.
+Parsed by `AirportsLoader`. Must be present in the working directory.
 
+**Line format:**
 ```
-AMERICAS:    SPIM(Lima)  SBGR(Sao Paulo)  KMIA(Miami)  MMMX(Mexico City)  TNCM(St Maarten)
-EUROPE:      LEMD(Madrid)  LFPG(Paris)  EGLL(London)  LIRF(Rome)
-ASIA/OTHER:  OMDB(Dubai)  VHHH(Hong Kong)  RJTT(Tokyo)  YSSY(Sydney)
+NN   ICAO   CITY                COUNTRY         ABBR  GMT   CAP   ...lat/lon...
 ```
 
-Connections are not fully connected — a subset of realistic routes is generated with varying capacities (`[50, 150]` bags) and departure times distributed across the day.
+**Example:**
+```
+05   SPIM   Lima                Perú            lima    -5     440     Latitude: ...
+│    │      └─ city name        └─ country      └─ abbr └─ GMT offset └─ warehouse capacity
+│    └─ ICAO code
+└─ sequential number
+```
+
+The `AirportsLoader` automatically detects UTF-16 BE/LE or UTF-8 via BOM.
+Continent is derived from the ICAO prefix via `Continent.fromIcao()`.
 
 ---
 
@@ -981,6 +976,8 @@ Connections are not fully connected — a subset of realistic routes is generate
 ### Prerequisites
 - Java 17+
 - Maven 3.6+
+- `aeropuertos.txt` in the working directory (or the project root)
+- `planes_vuelo.txt` in the working directory (or passed as last arg)
 
 ### Build
 ```bash
@@ -991,26 +988,25 @@ mvn clean compile
 
 **Important:** Always pass `-Dfile.encoding=UTF-8` when running directly — the program uses UTF-8 box-drawing characters and accented text in its console output.
 
-**E1 — Synthetic simulation (5 days, 50 requests/day):**
-```bash
-java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main E1 5 50
-```
-
-**E2 — Real-time replanning (30 requests):**
-```bash
-java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main E2 0 30
-```
-
-**E3 — Collapse simulation (20 base requests):**
-```bash
-java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main E3 0 20
-```
-
-**E1R — Real data period simulation:**
+**E1 — Period simulation (5 days, real data):**
 ```bash
 java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main \
-    E1R ./_envios_preliminar_ 0 3
+    E1 ./_envios_preliminar_ 0 5
 # optional: add planes_vuelo.txt path as 5th arg
+```
+
+**E2 — Real-time replanning:**
+```bash
+java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main \
+    E2 ./_envios_preliminar_
+# optional: add planes_vuelo.txt path as 3rd arg
+```
+
+**E3 — Collapse simulation:**
+```bash
+java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main \
+    E3 ./_envios_preliminar_
+# optional: add planes_vuelo.txt path as 3rd arg
 ```
 
 **EXP — Batch experimentation (30 replicas):**
@@ -1032,11 +1028,27 @@ Exits with code `0` on success, `1` on failure.
 
 ## 8. Known Limitations & Design Notes
 
-### 8.1 Virtual Next-Day Flights (Approximation)
+### 8.1 Virtual Next-Day Flights (Fixed)
 
-`LogisticsNetwork.getActiveFlightsFrom()` creates ephemeral `Flight` objects with IDs like `F5_d1` for multi-day routing. These objects are **never registered** in the network's flight list, so their `assignedLoad` is always 0.
+`LogisticsNetwork.getActiveFlightsFrom()` creates ephemeral `Flight` objects with IDs
+like `F5_d1` for multi-day routing. Previously these objects were re-created fresh on
+every call, so their `assignedLoad` was always 0 — capacity violations on multi-day
+legs went undetected.
 
-**Consequence:** capacity violations on multi-day routes go undetected during both route search and feasibility checks. A shipment routed via `F5_d1` might "share" capacity with nothing, even if the real `F5` is already full on day 0. This is a deliberate approximation to keep multi-day routing simple.
+**This is now fixed.** Virtual flights are cached in a `LinkedHashMap<String, Flight>`
+inside `LogisticsNetwork`. The same object is returned on every subsequent call for the
+same `(flight, dayOffset)` pair, so `assignedLoad` accumulates correctly. `resetLoads()`
+also clears the virtual-flight cache, keeping the lifecycle consistent with real flights.
+
+```
+Original flight F5: SPIM→LEMD, departs 0.25 (06:00)
+
+Shipment arrives at SPIM at time 0.8 (19:12) — too late for today's F5.
+→ Virtual flight F5_d1: SPIM→LEMD, departs 1.25 (06:00 next day)
+   • same object returned on repeated calls  ← NEW
+   • assignedLoad tracked correctly          ← NEW
+   • cleared by resetLoads()                 ← NEW
+```
 
 ### 8.2 Warehouse Overflow Not Enforced
 

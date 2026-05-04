@@ -6,27 +6,27 @@ Java 17 Maven project. Tabu Search metaheuristic for luggage delivery scheduling
 
 ```bash
 mvn clean compile
-mvn exec:java -Dexec.mainClass="pe.edu.pucp.tasf.Main" -Dexec.args="E1 5 50"
 ```
 
 **Always pass `-Dfile.encoding=UTF-8`** when running manually — the program sets UTF-8 stdout and uses accented chars/box-drawing:
 ```bash
-java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main E1 5 50
+java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main E1 ./_envios_preliminar_ 0 5
 ```
+
+`aeropuertos.txt` and `planes_vuelo.txt` must be present in the working directory (or passed as last arg).
 
 ## Execution Modes
 
 | Mode | Args | Description |
 |------|------|-------------|
-| `E1` | `[days] [req/day]` | Synthetic simulation (default: 5 days, 50 req/day) |
-| `E2` | `0 [req]` | Real-time replanning (≤5 s/event) |
-| `E3` | `0 [baseReq]` | Collapse sim — demand +20%/day until RED |
-| `E1R` | `<folder> [startDay] [numDays] [planes_vuelo.txt]` | Period sim from real `_envios_XXXX_.txt` files |
-| `EXP` | `<folder> [replicas] [output.csv] [planes_vuelo.txt]` | N replicas (seeds 1..N), writes CSV incrementally |
+| `E1` | `<folder> [startDay=0] [numDays=5] [planes_vuelo.txt]` | Period sim from real `_envios_XXXX_.txt` files (default: 5 days) |
+| `E2` | `<folder> [planes_vuelo.txt]` | Real-time replanning (≤5 s/event) |
+| `E3` | `<folder> [planes_vuelo.txt]` | Collapse sim — demand +20%/day until RED |
+| `EXP` | `<folder> [replicas=30] [output.csv] [planes_vuelo.txt]` | N replicas (seeds 1..N), writes CSV incrementally |
 
-E1R example:
+E1 example (5 days):
 ```bash
-java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main E1R ./_envios_preliminar_ 0 3
+java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.Main E1 ./_envios_preliminar_ 0 5
 ```
 
 EXP example:
@@ -49,20 +49,21 @@ java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.test.RunnerTest [
 ## Architecture
 
 ```
-Main.java                        — entry point, dispatches 5 modes
+Main.java                        — entry point, dispatches 4 modes (E1/E2/E3/EXP)
 model/                           — Airport, Flight (mutable load), LogisticsNetwork, Solution, ShipmentRequest
 algorithm/TabuSearchSolver.java  — solve(), replanify(), getCsvRow()
 algorithm/TabuSearchConfig.java  — fluent builder for TS parameters
 io/EnviosDataLoader.java         — parser for _envios_XXXX_.txt
-util/NetworkGenerator.java       — synthetic network/requests (E1/E2/E3)
-util/RealNetworkBuilder.java     — network from ICAO codes ± planes_vuelo.txt
+io/AirportsLoader.java           — parser for aeropuertos.txt (UTF-16)
+util/RealNetworkBuilder.java     — network from Airport list + planes_vuelo.txt
 test/RunnerTest.java             — integration smoke test
 ```
 
 ## Key Quirks
 
-- **`Flight` is mutable** — tracks assigned load. `LogisticsNetwork.resetLoads()` must be called before each `solve()` call. EXP mode does this between replicas.
-- **`planes_vuelo.txt` is optional** — if omitted, `RealNetworkBuilder` synthesizes a flight network from ICAO codes found in shipment files.
+- **`Flight` is mutable** — tracks assigned load. `LogisticsNetwork.resetLoads()` must be called before each `solve()` call. EXP mode does this between replicas. Virtual next-day flights (e.g. `F5_d1`) are now cached in `LogisticsNetwork.virtualFlights` and also reset by `resetLoads()`.
+- **`aeropuertos.txt` is required** — loaded by `AirportsLoader` to build the network. Must be in the working directory.
+- **`planes_vuelo.txt` is required** — loaded by `RealFlightLoader`. Must be in the working directory or passed as last argument. There is no synthetic fallback.
 - **Shipment filename encodes origin ICAO**: `_envios_SPIM_.txt` = Lima (SPIM).
 - **Default seed is `42`**; EXP mode uses seeds 1..N for reproducibility.
 - **No CI, no linter, no pre-commit hooks.**

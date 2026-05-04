@@ -1,0 +1,60 @@
+PONTIFICIA UNIVERSIDAD CATOLICA DEL PERU
+FACULTAD DE CIENCIAS E INGENIERIA
+ENUNCIADO DE LA SITUACIÓN AUTÉNTICA
+(Semestre 2026-1)
+Problema simplificado para propósitos del curso
+
+La empresa Tasf.B2B de transporte aéreo, ofrece entre otros servicios, en el contexto de la
+gestión de equipajes extraviados entre vuelos, el traslado de equipaje (maletas) entre los aeropuertos de
+América, Asia y Europa. La Empresa ha tenido un relativo éxito en el cumplimiento de sus plazos de
+entrega, lo que le ha permitido crecer considerablemente en clientes (líneas aéreas) y traslados. La
+Empresa tiene como política que cada cliente que envía o recibe las maletas lo hace directamente en las
+oficinas de Tasf.B2B (que quedan en los aeropuertos de dichas ciudades). Se debe considerar que sólo se
+trabajará con un aeropuerto en cada ciudad.
+
+Tasf.B2B para evitar complicaciones de gestión acepta maletas cuyo rango de medidas y pesos
+está estandarizado y cada unidad es conocida simplemente como maleta. Una aerolínea entrega una o más
+maletas a Tasf.B2B para ser enviado a un aeropuerto. Además, como parte del servicio entrega al cliente
+por cada maleta o grupo de maletas: el plan de viaje de las maletas, el reporte de monitoreo de viaje por
+demanda. En el monitoreo, se indican en qué ciudad está en ese momento, según el plan de viaje del
+paquete, actividad manual que actualizan por cada aeropuerto a donde llega la maleta.
+
+El plazo de entrega establecido de las maletas para sus clientes es de un día como máximo para
+ciudades del mismo continente y de dos días para distinto continente. Tasf.B2B tiene una unidad de
+negocios de traslados que ha señalado que el tiempo para el traslado de una maleta entre dos ciudades del
+mismo continente es de medio día y de diferente continente de un día. Los vuelos de Tasf.B2B se realizan
+una o más veces al día entre ciudades del mismo continente y al menos una vez al día entre algunas
+ciudades de distinto continente. La capacidad máxima actual de traslado para vuelos dentro del mismo
+continente varía entre de 150 y 250 maletas según el vuelo; y para distinto continente varía entre 150 y
+400 maletas según el vuelo. La capacidad de almacenamiento en cada almacén en el aeropuerto varía
+entre 500 y 800 maletas, según la ciudad.
+
+La empresa Tasf.B2B ha contratado a usted y su equipo para que desarrolle una solución
+informática para sus principales necesidades. Dichas necesidades se resumen en: (i) registrar la cantidad
+de maletas a ser enviadas; (ii) planificar -y replanificar- las rutas de las maletas cumpliendo los plazos
+comprometidos (componente planificador) pues hay cancelaciones de vuelos; y (iii) presentar
+gráficamente el monitoreo de las operaciones, en un mapa (componente visualizador) al que pueda
+conectarse cualquier dispositivo en tiempo real y cada cual pudiendo interactuar en distintas zonas y
+maneras. Para la evaluación del curso, se manejará 3 escenarios: las operaciones día a día (en tiempo
+real), la simulación de periodo (semanal, 5 días o 3 días) del traslado de las maletas y la simulación hasta
+el colapso de las operaciones de Tasf.B2B. Para ello se requiere que: (a) el componente planificador
+resuelva mediante parámetros los 3 escenarios; y (b) presente de manera gráfica información
+relevante del desempeño de las operaciones (en los 3 escenarios). El primer escenario en resolverse es
+el de la simulación del periodo que debe tomar en ejecutarse entre 30 y 90 minutos.
+
+Requisitos No Funcionales:
+Para este proyecto se establecen los siguientes requisitos no funcionales:
+
+a. Presentar dos soluciones algorítmicas para el planificador de la solución en Lenguaje Java y
+   evaluadas por experimentación numérica.
+b. Los dos algoritmos de la experimentación numérica deben ser del tipo metaheurísticos.
+c. Usar colores de semáforo (verde, ámbar y rojo) en lo que se requiera y los rangos serán parámetros.
+d. La solución debe funcionar en el equipamiento (computadores y servidores) provisto por el
+   laboratorio de Ingeniería Informática.
+e. Se evalúa el proceso seguido utilizando NTP-ISO/IEC 29110-5-1-2 (VSE)
+f. Se graba los videos de la presentación final del equipo (exposiciones).
+g. Se entrega videos (avances, final u otros) sobre los 3 escenarios requeridos a indicación del equipo
+   docente.
+
+San Miguel, marzo del 2026
+Profesor del Curso

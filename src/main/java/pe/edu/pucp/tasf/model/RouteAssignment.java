@@ -93,10 +93,15 @@ public class RouteAssignment {
     }
 
     /**
-     * Verifica la factibilidad: ningún vuelo debe estar cancelado y todos
-     * deben tener capacidad restante suficiente para la cantidad solicitada.
+     * Verifica la factibilidad: la ruta no puede estar vacía, ningún vuelo
+     * debe estar cancelado y todos deben tener capacidad restante suficiente.
+     *
+     * Una ruta vacía se considera infactible (el envío no tiene ningún vuelo
+     * asignado) para mantener coherencia con la penalización PENALTY_INFEASIBLE
+     * de la función objetivo.
      */
     public boolean isFeasible() {
+        if (flights.isEmpty()) return false; // sin vuelos = infactible
         for (Flight f : flights) {
             if (f.isCancelled() || f.getAssignedLoad() > f.getCapacity()) {
                 return false;

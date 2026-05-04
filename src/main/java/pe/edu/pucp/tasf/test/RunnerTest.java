@@ -2,17 +2,21 @@ package pe.edu.pucp.tasf.test;
 
 import pe.edu.pucp.tasf.algorithm.TabuSearchConfig;
 import pe.edu.pucp.tasf.algorithm.TabuSearchSolver;
+import pe.edu.pucp.tasf.io.AirportsLoader;
 import pe.edu.pucp.tasf.io.EnviosDataLoader;
+import pe.edu.pucp.tasf.model.Airport;
 import pe.edu.pucp.tasf.model.LogisticsNetwork;
 import pe.edu.pucp.tasf.model.ShipmentRequest;
 import pe.edu.pucp.tasf.model.Solution;
 import pe.edu.pucp.tasf.util.RealNetworkBuilder;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 
 /**
- * Test de integración para el flujo E1R (datos reales).
+ * Test de integración para el flujo E1 (datos reales).
  *
  * No usa JUnit. Corre el pipeline completo contra la carpeta test-data/
  * y valida invariantes básicos con afirmaciones PASS/FAIL.
@@ -23,6 +27,8 @@ import java.util.List;
  *
  * O desde la raíz del proyecto:
  *   java -Dfile.encoding=UTF-8 -cp target/classes pe.edu.pucp.tasf.test.RunnerTest [carpeta]
+ *
+ * Requiere aeropuertos.txt y planes_vuelo.txt en el directorio de trabajo.
  */
 public class RunnerTest {
 
@@ -37,7 +43,7 @@ public class RunnerTest {
         String folder = args.length > 0 ? args[0] : "test-data";
 
         System.out.println("╔══════════════════════════════════════════════════╗");
-        System.out.println("║        RunnerTest – Pipeline E1R (test-data)     ║");
+        System.out.println("║         RunnerTest – Pipeline E1 (test-data)     ║");
         System.out.println("╚══════════════════════════════════════════════════╝");
         System.out.println("Carpeta de datos: " + folder);
         System.out.println();
@@ -59,11 +65,29 @@ public class RunnerTest {
                 loader.getShipments().size() > 0);
         info("Envíos cargados: " + loader.getShipments().size());
 
-        // ── PASO 2: RealNetworkBuilder ────────────────────────────────────────
-        section("PASO 2 — RealNetworkBuilder");
+        // ── PASO 2: AirportsLoader + RealNetworkBuilder ───────────────────────
+        section("PASO 2 — AirportsLoader + RealNetworkBuilder");
+
+        // Buscar aeropuertos.txt en el directorio actual
+        Path airportsFile = Paths.get("aeropuertos.txt");
+        assertThat("aeropuertos.txt existe en el directorio actual",
+                Files.isRegularFile(airportsFile));
+
+        // Buscar planes_vuelo.txt en el directorio actual
+        Path flightsFile = Paths.get("planes_vuelo.txt");
+        assertThat("planes_vuelo.txt existe en el directorio actual",
+                Files.isRegularFile(flightsFile));
+
+        AirportsLoader airportsLoader = new AirportsLoader();
+        airportsLoader.loadFromFile(airportsFile);
+        List<Airport> airports = airportsLoader.getAirports();
+
+        assertThat("Se cargaron aeropuertos desde aeropuertos.txt (> 0)",
+                airports.size() > 0);
+        info("Aeropuertos cargados: " + airports.size());
 
         RealNetworkBuilder builder = new RealNetworkBuilder(42);
-        LogisticsNetwork network = builder.build(loader.getIcaoCodes());
+        LogisticsNetwork network = builder.build(airports, flightsFile);
 
         assertThat("La red tiene aeropuertos (> 0)",
                 network.getAirportCount() > 0);
@@ -173,3 +197,4 @@ public class RunnerTest {
         System.out.println("         " + msg);
     }
 }
+
